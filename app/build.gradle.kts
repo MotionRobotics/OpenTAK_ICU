@@ -20,7 +20,7 @@ plugins {
 
 android {
     namespace = "io.opentakserver.opentakicu"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "io.opentakserver.opentakicu"
@@ -95,7 +95,11 @@ dependencies {
     implementation("com.github.topjohnwu.libsu:nio:6.0.0")
 
     implementation("com.github.pedroSG94.RootEncoder:extra-sources:2.5.4")
+    implementation("androidx.core:core-ktx:1.15.0")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+
+    // Add the USB serial library
+    implementation("com.github.felHR85:UsbSerial:6.0.6")
 }

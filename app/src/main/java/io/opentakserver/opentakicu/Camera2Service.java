@@ -49,6 +49,9 @@ import android.hardware.SensorManager;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbDeviceConnection;
+import android.hardware.usb.UsbManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
@@ -78,6 +81,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.dataformat.xml.XmlFactory;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
+import com.felhr.usbserial.UsbSerialDevice;
 import com.pedro.common.AudioCodec;
 import com.pedro.common.ConnectChecker;
 import com.pedro.common.VideoCodec;
@@ -101,18 +105,28 @@ import com.pedro.library.view.OpenGlView;
 import com.pedro.rtsp.rtsp.Protocol;
 import com.topjohnwu.superuser.Shell;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.net.SocketException;
 import java.security.KeyStore;
 import java.security.SecureRandom;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -182,11 +196,13 @@ public class Camera2Service extends Service implements ConnectChecker,
     private boolean prepareVideo = false;
 
     private int currentCameraId = 0;
+    private int currentHwCamId = 0;
     private boolean hasRedLightCamera = false;
     private boolean redLightEnabled = false;
     private int redLightCameraId = -1;
     private boolean isRooted = false;
     private final ArrayList<String> cameraIds = new ArrayList<>();
+    private final HashMap<String, ArrayList<String>> hardwareCams = new HashMap<>();
     private boolean lanternEnabled = false; //Keeps track of lantern when using a USB camera
 
     private SensorManager sensorManager;
@@ -213,6 +229,25 @@ public class Camera2Service extends Service implements ConnectChecker,
     private MulticastClient multicastClient;
     ExecutorService executor = Executors.newSingleThreadExecutor();
 
+    // UDP Socket for receiving control messages
+    private DatagramSocket udpSocket;
+    private OutputStream udpOut;
+
+    private int controlPort = 6969;
+
+    private Handler controlHandler;
+    private HandlerThread controlThread;
+
+    private boolean _controlThreadTerminate = false;
+
+    private UsbManager usbManager;
+    private PendingIntent permissionIntent;
+    private UsbDevice device;
+    private UsbSerialDevice serial;
+    private UsbDeviceConnection conn;
+
+    String ACTION_USB_PERMISSION = "com.android.example.USB_PERMISSION";
+
     final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -231,6 +266,97 @@ public class Camera2Service extends Service implements ConnectChecker,
                         stopSelf();
                         break;
                 }
+            }
+        }
+    };
+
+    private void startUsbConnection() {
+        if (device != null) {
+            return;
+        }
+
+        HashMap<String, UsbDevice> deviceList = usbManager.getDeviceList();
+        if (deviceList.isEmpty()) {
+            Log.d(LOGTAG, "No USB devices found");
+            return;
+        }
+
+        boolean keep = true;
+        for (UsbDevice entry : deviceList.values()) {
+            if (entry.getVendorId() == 0x2e8a && entry.getProductId() == 0x000a) {
+                device = entry;
+                usbManager.requestPermission(entry, permissionIntent);
+                keep = false;
+                Log.i(LOGTAG, "Device found: " + entry.getDeviceName());
+            } else {
+                conn = null;
+                device = null;
+                Log.i(LOGTAG, "Device not found");
+            }
+            if (!keep)
+                return;
+        }
+    }
+
+    private void sendToUsbDevice(String message) {
+        if (serial != null) {
+            serial.write(message.getBytes());
+        }
+    }
+
+    private void disconnectUSB() {
+        if (serial != null) {
+            serial.close();
+            serial = null;
+        }
+        if (conn != null) {
+            conn.close();
+            conn = null;
+        }
+        device = null;
+    }
+
+    // Broadcast receiver for USB permission
+    private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if (ACTION_USB_PERMISSION.equals(action)) {
+                synchronized (this) {
+                    if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                        conn = usbManager.openDevice(device);
+                        serial = UsbSerialDevice.createUsbSerialDevice(device, conn);
+                        if (serial != null) {
+                            if (serial.open()) {
+                                serial.setBaudRate(115200);
+                                serial.setDataBits(UsbSerialDevice.DATA_BITS_8);
+                                serial.setStopBits(UsbSerialDevice.STOP_BITS_1);
+                                serial.setParity(UsbSerialDevice.PARITY_NONE);
+                                serial.setFlowControl(UsbSerialDevice.FLOW_CONTROL_OFF);
+
+                                serial.read(new UsbSerialDevice.UsbReadCallback() {
+                                    @Override
+                                    public void onReceivedData(byte[] bytes) {
+                                        String data = new String(bytes);
+                                        Log.d(LOGTAG, "Received data: " + data);
+                                    }
+                                });
+
+                                Log.d(LOGTAG, "Serial connection opened");
+                            } else {
+                                Log.d(LOGTAG, "Serial connection failed to open");
+                            }
+                        } else {
+                            Log.d(LOGTAG, "Serial is null");
+                        }
+                    } else {
+                        Log.d(LOGTAG, "Permission denied for device " + device.getDeviceName());
+                    }
+                }
+            } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action)) {
+                startUsbConnection();
+            } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
+                disconnectUSB();
             }
         }
     };
@@ -290,6 +416,30 @@ public class Camera2Service extends Service implements ConnectChecker,
         accelerometer = sensorManager.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER);
 
         getCameraIds();
+
+        // USB permissions
+        usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+
+        int pendingFlags;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            pendingFlags = PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT;
+        } else {
+            pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        }
+
+        Intent i = new Intent(ACTION_USB_PERMISSION);
+        i.setPackage(getPackageName());
+
+        permissionIntent = PendingIntent.getBroadcast(this, 0, i, pendingFlags);
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(ACTION_USB_PERMISSION);
+        filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(usbReceiver, filter);
+        }
     }
 
     private void getCameraIds() {
@@ -319,6 +469,22 @@ public class Camera2Service extends Service implements ConnectChecker,
             }
 
             Log.d(LOGTAG, "Got cameraIds " + cameraIds);
+
+            // Get the hardware cameras
+            CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+            try {
+                for (String cameraId : cameraIds) {
+                    CameraCharacteristics cameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId);
+                    Set hwC = null;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        hwC = cameraCharacteristics.getPhysicalCameraIds();
+                    }
+                    ArrayList<String> hwCameras = new ArrayList<>(hwC);
+                    hardwareCams.put(cameraId, hwCameras);
+                }
+            } catch (CameraAccessException e) {
+                Log.e(LOGTAG, "Failed to get camera characteristics", e);
+            }
         }
     }
 
@@ -425,12 +591,122 @@ public class Camera2Service extends Service implements ConnectChecker,
         } else {
             Log.e(LOGTAG, "not starting preview");
         }
+
+        // Start the UDP socket for receiving control messages
+        if (controlHandler == null) {
+            startControlSocket();
+        }
+    }
+
+    public void startControlSocket() {
+        controlThread = new HandlerThread("ControlThread");
+        controlThread.start();
+        controlHandler = new Handler(controlThread.getLooper());
+
+        _controlThreadTerminate = false;
+
+        controlHandler.post(this::controlSocketListener);
+    }
+
+    private void controlSocketListener() {
+        try {
+            udpSocket = new DatagramSocket(controlPort);
+            byte[] buffer = new byte[1024];
+            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+
+            while (!_controlThreadTerminate) {
+                udpSocket.receive(packet);
+                String message = new String(packet.getData(), 0, packet.getLength());
+                Log.d(LOGTAG, "Received message: " + message);
+
+                // Parse JSON message
+                try {
+                    JSONObject json = new JSONObject(message);
+                    String action = json.getString("action");
+                    switch(action) {
+                        case "setPhysicalCameraId":
+                            String cameraId = json.getString("cameraId");
+                            Log.d(LOGTAG, "Setting physical camera ID to " + cameraId);
+
+                            ArrayList<String> hwCams = hardwareCams.get(cameraIds.get(currentCameraId));
+                            if (hwCams != null && hwCams.contains(cameraId)) {
+                                setPhysicalCameraId(cameraId);
+
+                                // Also set currentPhysicalCameraId to the new cameraId
+                                currentHwCamId = hwCams.indexOf(cameraId);
+                            } else {
+                                Log.e(LOGTAG, "Invalid physical camera ID " + cameraId);
+                            }
+                            break;
+
+                        case "loopBackCams":
+                            loopBackCams();
+                            break;
+
+                        case "switchCamera":
+                            switchCamera();
+                            break;
+
+                        case "toggleLantern":
+                            boolean lanternEnabled = toggleLantern();
+                            JSONObject response = new JSONObject();
+                            response.put("lanternEnabled", lanternEnabled);
+                            InetAddress replyAddress = packet.getAddress();
+                            int replyPort = packet.getPort();
+                            byte[] replyData = response.toString().getBytes();
+                            DatagramPacket replyPacket = new DatagramPacket(replyData, replyData.length, replyAddress, replyPort);
+                            udpSocket.send(replyPacket);
+                            break;
+
+                        case "setPWM":
+                            String pin = json.getString("pin");
+                            String freq = json.getString("freq");
+                            String duty = json.getString("duty");
+                            Log.d(LOGTAG, "Setting PWM to " + pin + " with freq " + freq + " and duty " + duty);
+                            sendToUsbDevice(pin + " " + freq + " " + duty + "\n");
+                            break;
+                    }
+                } catch (JSONException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            _controlThreadTerminate = false;
+        } catch (IOException e) {
+            Log.e(LOGTAG, "Failed to start control socket", e);
+        }
     }
 
     public void stopPreview() {
         if (getStream().isOnPreview()) {
             Log.d(LOGTAG, "Stopping Preview");
             getStream().stopPreview();
+        }
+
+        // Close the UDP socket
+        if (controlHandler != null) {
+            stopControlSocket();
+        }
+    }
+
+    public void stopControlSocket() {
+        _controlThreadTerminate = true;
+        controlHandler.removeCallbacksAndMessages(null);
+        controlThread.quitSafely();
+        controlHandler = null;
+        controlThread = null;
+
+        if (udpSocket != null) {
+            udpSocket.close();
+            udpSocket = null;
+        }
+
+        if (udpOut != null) {
+            try {
+                udpOut.close();
+            } catch (IOException e) {
+                Log.e(LOGTAG, "Failed to close UDP output stream", e);
+            }
+            udpOut = null;
         }
     }
 
@@ -529,6 +805,8 @@ public class Camera2Service extends Service implements ConnectChecker,
                 toggleRedLights();
             }
 
+            currentHwCamId = 0;
+
             CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
             try {
                 CameraCharacteristics cameraCharacteristics = cameraManager.getCameraCharacteristics(camera2Source.getCurrentCameraId());
@@ -543,6 +821,35 @@ public class Camera2Service extends Service implements ConnectChecker,
             } catch (CameraAccessException e) {
                 Log.e(LOGTAG, "Failed to get camera characteristics", e);
             }
+        }
+    }
+
+    public void loopBackCams() {
+        // Get available hardware cameras in the current logical camera
+        ArrayList<String> hwCams = hardwareCams.get(cameraIds.get(currentCameraId));
+        if (hwCams == null) {
+            Log.e(LOGTAG, "No hardware cameras found for current logical camera");
+            return;
+        }
+
+        Log.d(LOGTAG, "Looping back cameras: " + hwCams);
+
+        // Switch to the next hardware camera
+        currentHwCamId++;
+        if (currentHwCamId > hwCams.size() - 1) {
+            currentHwCamId = 0;
+        }
+
+        Log.d(LOGTAG, "Switching to hardware camera " + hwCams.get(currentHwCamId));
+
+        // Switch to the next hardware camera
+        setPhysicalCameraId(hwCams.get(currentHwCamId));
+    }
+
+    public void setPhysicalCameraId(String cameraId) {
+        Camera2Source camera2Source = (Camera2Source) getStream().getVideoSource();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            camera2Source.setPhysicalCameraId(cameraId);
         }
     }
 
@@ -563,6 +870,8 @@ public class Camera2Service extends Service implements ConnectChecker,
     @Override
     public void onDestroy() {
         observer.postValue(null);
+        disconnectUSB();
+        unregisterReceiver(usbReceiver);
         unregisterReceiver(receiver);
         preferences.unregisterOnSharedPreferenceChangeListener(this);
     }
@@ -1289,6 +1598,9 @@ public class Camera2Service extends Service implements ConnectChecker,
             executor.execute(() -> {
                 try {
                     Response response = okHttpClient.newCall(request).execute();
+                    if (!response.isSuccessful()) {
+                        throw new IOException(response.message() + " " + response.code());
+                    }
                     Log.d(LOGTAG, "Posted video: " + response.message() + " " + response.code());
                     Log.d(LOGTAG, response.toString());
                 } catch (IOException e) {

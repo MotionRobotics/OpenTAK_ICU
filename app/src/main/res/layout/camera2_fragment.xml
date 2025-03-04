@@ -173,6 +173,25 @@
                 app:srcCompat="@drawable/flashlight_off" />
 
         </GridLayout>
+
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/loop_backcams"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="332dp"
+            android:layout_marginBottom="136dp"
+            android:backgroundTint="@color/HALF_CLEAR_BLACK"
+            android:clickable="true"
+            android:elevation="0dp"
+            android:focusable="true"
+            app:backgroundTint="@color/WHITE"
+            app:borderWidth="2dp"
+            app:elevation="0dp"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:srcCompat="@android:drawable/ic_popup_sync"
+            app:tint="@android:color/white"
+            app:useCompatPadding="true" />
     </androidx.constraintlayout.widget.ConstraintLayout>
 
     <androidx.constraintlayout.widget.ConstraintLayout

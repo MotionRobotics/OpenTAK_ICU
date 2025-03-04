@@ -20,6 +20,11 @@
         android:maxSdkVersion="28"
         tools:ignore="ScopedStorage" />
 
+    <!-- USB permission -->
+    <uses-feature android:name="android.hardware.usb.host" />
+
+    <uses-sdk android:maxSdkVersion="12" />
+
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />

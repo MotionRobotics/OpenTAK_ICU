@@ -45,6 +45,7 @@ import com.pedro.common.ConnectChecker;
 import com.pedro.encoder.input.sources.video.Camera2Source;
 import com.pedro.encoder.input.video.CameraHelper;
 
+import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.preference.PreferenceManager;
 import io.opentakserver.opentakicu.contants.Preferences;
@@ -110,7 +111,7 @@ public class Camera2Fragment extends Fragment
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             activity.registerReceiver(receiver, intentFilter, Context.RECEIVER_EXPORTED);
         } else {
-            activity.registerReceiver(receiver, intentFilter);
+            ContextCompat.registerReceiver(activity, receiver, intentFilter, ContextCompat.RECEIVER_NOT_EXPORTED);
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -346,6 +347,9 @@ public class Camera2Fragment extends Fragment
 
         setStatusState();
 
+        FloatingActionButton loopBackCams = activity.findViewById(R.id.loop_backcams);
+        loopBackCams.setOnClickListener(this);
+
         bStartStop = activity.findViewById(R.id.b_start_stop);
         bStartStop.setOnClickListener(this);
         switchCameraButton = activity.findViewById(R.id.switch_camera);
@@ -441,6 +445,8 @@ public class Camera2Fragment extends Fragment
             camera_service.switchCamera();
             setZoomRange();
             flashlight.setImageResource(R.drawable.flashlight_off);
+        } else if (id == R.id.loop_backcams) {
+            camera_service.loopBackCams();
         } else if (id == R.id.settingsButton) {
             Intent intent = new Intent(activity, SettingsActivity.class);
             startActivity(intent);
