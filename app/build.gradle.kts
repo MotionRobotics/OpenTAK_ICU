@@ -94,7 +94,7 @@ dependencies {
     implementation("com.github.topjohnwu.libsu:core:6.0.0")
     implementation("com.github.topjohnwu.libsu:nio:6.0.0")
 
-    implementation("com.github.pedroSG94.RootEncoder:extra-sources:2.5.4")
+    implementation("com.github.pedroSG94.RootEncoder:extra-sources:2.5.7")
     implementation("androidx.core:core-ktx:1.15.0")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

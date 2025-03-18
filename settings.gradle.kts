@@ -24,10 +24,3 @@ sourceControl {
 
 rootProject.name = "OpenTAK ICU"
 include(":app")
-
-includeBuild("/home/malolan/AndroidStudioProjects/RootEncoder") {
-    dependencySubstitution {
-        substitute(module("com.github.pedroSG94.RootEncoder:library")).using(project(":library"))
-        substitute(module("com.github.pedroSG94.RootEncoder:extra-sources")).using(project(":extra-sources"))
-    }
-}

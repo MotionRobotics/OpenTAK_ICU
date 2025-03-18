@@ -115,6 +115,7 @@ import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketException;
 import java.security.KeyStore;
@@ -610,19 +611,26 @@ public class Camera2Service extends Service implements ConnectChecker,
 
     private void controlSocketListener() {
         try {
-            udpSocket = new DatagramSocket(controlPort);
-            byte[] buffer = new byte[1024];
+            // Open the UDP socket with the control port allowing address reuse
+            udpSocket = new DatagramSocket(null);
+            udpSocket.setReuseAddress(true);
+            udpSocket.bind(new InetSocketAddress(controlPort));
+
+            byte[] buffer = new byte[65535];
             DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+
+            Log.d(LOGTAG, "Listening for control messages on port " + udpSocket.getLocalPort());
 
             while (!_controlThreadTerminate) {
                 udpSocket.receive(packet);
                 String message = new String(packet.getData(), 0, packet.getLength());
-                Log.d(LOGTAG, "Received message: " + message);
+                Log.d(LOGTAG, "Received message: " + message + " from " + packet.getAddress().getHostAddress());
 
                 // Parse JSON message
                 try {
                     JSONObject json = new JSONObject(message);
                     String action = json.getString("action");
+                    Log.d(LOGTAG, "Received action: " + action);
                     switch(action) {
                         case "setPhysicalCameraId":
                             String cameraId = json.getString("cameraId");
@@ -634,8 +642,25 @@ public class Camera2Service extends Service implements ConnectChecker,
 
                                 // Also set currentPhysicalCameraId to the new cameraId
                                 currentHwCamId = hwCams.indexOf(cameraId);
+
+                                JSONObject response = new JSONObject();
+                                response.put("cameraId", cameraId);
+                                InetAddress replyAddress = packet.getAddress();
+                                int replyPort = packet.getPort();
+                                byte[] replyData = response.toString().getBytes();
+                                DatagramPacket replyPacket = new DatagramPacket(replyData, replyData.length, replyAddress, replyPort);
+                                udpSocket.send(replyPacket);
                             } else {
                                 Log.e(LOGTAG, "Invalid physical camera ID " + cameraId);
+                                Log.e(LOGTAG, "Available hardware cameras: " + hwCams);
+
+                                JSONObject response = new JSONObject();
+                                response.put("cameraId", "Invalid");
+                                InetAddress replyAddress = packet.getAddress();
+                                int replyPort = packet.getPort();
+                                byte[] replyData = response.toString().getBytes();
+                                DatagramPacket replyPacket = new DatagramPacket(replyData, replyData.length, replyAddress, replyPort);
+                                udpSocket.send(replyPacket);
                             }
                             break;
 
@@ -849,7 +874,7 @@ public class Camera2Service extends Service implements ConnectChecker,
     public void setPhysicalCameraId(String cameraId) {
         Camera2Source camera2Source = (Camera2Source) getStream().getVideoSource();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            camera2Source.setPhysicalCameraId(cameraId);
+            camera2Source.openPhysicalCamera(cameraId);
         }
     }
 
